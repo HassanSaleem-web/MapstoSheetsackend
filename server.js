@@ -68,9 +68,9 @@ function rgbToHex(color) {
 // Set column widths
 function setColumnWidths(worksheet) {
   worksheet['!cols'] = [
-    { wch: 50 }, // Column A width
+    { wch: 30 }, // Column A width
     { wch: 50 }, // Column B width
-    { wch: 50 }, // Column C width
+    { wch: 40 }, // Column C width
   ];
 }
 
@@ -148,7 +148,7 @@ app.post(
 
       res.json({
         status: "success",
-        downloadLink: `https://xyz-b4es.onrender.com/download/${outputFilePath.split("/").pop()}`,
+        downloadLink: `https://mapstosheetsackend-1.onrender.com/download/${outputFilePath.split("/").pop()}`,
       });
     } catch (error) {
       console.error("Error:", error);
