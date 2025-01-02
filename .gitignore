@@ -1,0 +1,52 @@
+# Node.js dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+logs/**/*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+
+# Uploaded files (Multer)
+uploads/
+
+# Excel and JSON outputs
+*.xlsx
+*.json
+output/
+
+# IDE and Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.sublime*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage and build
+coverage/
+dist/
+build/
+
+# Dependency files
+*.tgz
+
+# Debugging files
+*.log
+*.trace
+*.pid
