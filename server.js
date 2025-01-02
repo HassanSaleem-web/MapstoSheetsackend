@@ -1,7 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
-const XLSX = require("xlsx-style"); // For formatting support
+const XLSX = require("xlsx-style"); // Supports cell formatting
 const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config();
@@ -10,61 +10,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Multer setup for file uploads
+// Multer setup for file uploads (accepts any field name)
 const upload = multer({ dest: "uploads/" });
 
 // Load mappings and formatting details
 const mappings = JSON.parse(fs.readFileSync("mappings.json", "utf8"));
 const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", "utf8"));
 
-// ---- Helper Functions ----
-
-// Parse PDF and start recording from "AGE GROUP"
+// Parse PDF (Extract headings and values)
 async function parsePdf(filePath) {
   console.log(`Parsing PDF: ${filePath}`);
   const dataBuffer = fs.readFileSync(filePath);
   const data = await pdfParse(dataBuffer);
-
-  // Split content into lines
-  const lines = data.text.split("\n").map((line) => line.trim());
-  let startRecording = false; // Flag to detect where to start recording
-  const results = {};
-  let pairs = [];
-  let key = null;
-
-  console.log("Extracting key-value pairs...");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Start recording when "AGE GROUP" is found
-    if (line.toUpperCase() === "AGE GROUP") {
-      startRecording = true;
-    }
-
-    if (!startRecording) continue; // Skip until "AGE GROUP" is found
-
-    // Skip empty lines or ignore headings
-    if (line === "" || line.toUpperCase() === "QUESTIONNAIRE" || line.toUpperCase() === "QUESTIONS") {
-      continue;
-    }
-
-    if (line === line.toUpperCase()) {
-      // Treat uppercase lines as headings (keys)
-      key = line;
-    } else if (key) {
-      // Next line is the value
-      results[key] = line; // Create key-value pair
-      pairs.push(`${key}: ${line}`); // Save pair for txt file
-      key = null; // Reset key
-    }
-  }
-
-  // Write results to a txt file
-  const txtFilePath = `uploads/results_${Date.now()}.txt`;
-  fs.writeFileSync(txtFilePath, pairs.join("\n"));
-  console.log(`Key-value pairs saved in: ${txtFilePath}`);
-
-  return { results, txtFilePath };
+  console.log("Extracted PDF text:", data.text.substring(0, 100)); // Debug log
+  return data.text;
 }
 
 // Apply formatting dynamically from formatting_details.json
@@ -115,67 +74,90 @@ function setColumnWidths(worksheet) {
   ];
 }
 
-// ---- Upload Route ----
-app.post("/upload", upload.any(), async (req, res) => {
-  try {
-    console.log("Files uploaded successfully.");
+// Handle uploads and process data
+app.post(
+  "/upload",
+  upload.any(), // Accepts any field name
+  async (req, res) => {
+    try {
+      console.log("Files uploaded successfully.");
 
-    // Extract uploaded files
-    const pdfFile = req.files.find((file) => file.fieldname === "pdfFile");
-    const excelFile = req.files.find((file) => file.fieldname === "excelFile");
+      // Debugging: Log incoming fields and files
+      console.log("Incoming Fields:", req.body);
+      console.log("Incoming Files:", req.files);
 
-    if (!pdfFile || !excelFile) {
-      return res.status(400).json({ status: "error", message: "Missing required files!" });
-    }
+      // Extract uploaded files
+      const pdfFile = req.files.find((file) => file.fieldname === "pdfFile");
+      const excelFile = req.files.find((file) => file.fieldname === "excelFile");
 
-    // Parse PDF and extract key-value pairs
-    const { results, txtFilePath } = await parsePdf(pdfFile.path);
-
-    // Load Excel sheet
-    const excelFilePath = excelFile.path;
-    const workbook = XLSX.readFile(excelFilePath);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    console.log(`Loaded Excel Sheet: ${sheetName}`);
-
-    // Map extracted values to Excel cells
-    console.log("Mapping values to Excel cells...");
-    for (const key in results) {
-      if (mappings[key]) {
-        const cell = mappings[key]; // Get cell address from mappings.json
-        console.log(`Mapping: ${key} -> ${results[key]} -> Cell: ${cell}`);
-        worksheet[cell] = { v: results[key] };
-      } else {
-        console.warn(`No mapping found for key: ${key}`);
+      // Validate uploaded files
+      if (!pdfFile || !excelFile) {
+        return res.status(400).json({ status: "error", message: "Missing required files!" });
       }
+
+      // Parse uploaded PDF
+      const pdfText = await parsePdf(pdfFile.path);
+      const excelFilePath = excelFile.path;
+
+      // Extract data from PDF
+      const lines = pdfText.split("\n");
+      const data = {};
+      console.log("Extracting key-value pairs from PDF...");
+
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim().toUpperCase() && i + 1 < lines.length) {
+          const key = lines[i].trim().toUpperCase();
+          const value = lines[i + 1].trim();
+          data[key] = value;
+          console.log(`Extracted: ${key} => ${value}`);
+          i++;
+        }
+      }
+
+      // Load Excel sheet
+      const workbook = XLSX.readFile(excelFilePath);
+      const sheetName = workbook.SheetNames[0]; // Assume first sheet
+      const worksheet = workbook.Sheets[sheetName];
+      console.log(`Loaded Excel Sheet: ${sheetName}`);
+
+      // Match headings and map values
+      console.log("Matching headings and mapping values...");
+      for (const key in data) {
+        if (mappings[key]) {
+          const cell = mappings[key]; // Get cell address from mappings.json
+          console.log(`Mapping: ${key} -> ${data[key]} -> Cell: ${cell}`);
+          worksheet[cell] = { v: data[key] };
+          console.log(`Updated Cell ${cell} with Value: ${data[key]}`);
+        } else {
+          console.warn(`No mapping found for key: ${key}`);
+        }
+      }
+
+      // Apply formatting dynamically
+      console.log("Applying formatting dynamically...");
+      applyFormattingToSheet(worksheet, formattingDetails);
+
+      // Set column widths
+      console.log("Setting column widths...");
+      setColumnWidths(worksheet);
+
+      // Save updated Excel file
+      const outputFilePath = `uploads/updated_${Date.now()}.xlsx`;
+      XLSX.writeFile(workbook, outputFilePath);
+      console.log(`Updated Excel file saved at: ${outputFilePath}`);
+
+      res.json({
+        status: "success",
+        downloadLink: `https://mapstosheetsackend-1.onrender.com/download/${outputFilePath.split("/").pop()}`,
+      });
+    } catch (error) {
+      console.error("Error:", error);
+      res.json({ status: "error", message: error.toString() });
     }
-
-    // Apply formatting
-    console.log("Applying formatting...");
-    applyFormattingToSheet(worksheet, formattingDetails);
-
-    // Set column widths
-    console.log("Setting column widths...");
-    setColumnWidths(worksheet);
-
-    // Save updated Excel file
-    const outputFilePath = `uploads/updated_${Date.now()}.xlsx`;
-    XLSX.writeFile(workbook, outputFilePath);
-    console.log(`Updated Excel file saved at: ${outputFilePath}`);
-
-    // Respond with download links
-    res.json({
-      status: "success",
-      downloadExcel: `https://mapstosheetsackend-1.onrender.com/download/${outputFilePath.split("/").pop()}`,
-      downloadTxt: `http://localhost:5000/download/${txtFilePath.split("/").pop()}`,
-    });
-  } catch (error) {
-    console.error("Error:", error);
-    res.json({ status: "error", message: error.toString() });
   }
-});
+);
 
-// ---- Download Route ----
+// Serve updated Excel files for download
 app.get("/download/:filename", (req, res) => {
   const filename = req.params.filename;
   const filePath = `uploads/${filename}`;
@@ -187,7 +169,7 @@ app.get("/download/:filename", (req, res) => {
   });
 });
 
-// Start Server
+// Start server
 app.listen(5000, () => {
   console.log("Server running on http://localhost:5000");
 });
