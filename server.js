@@ -167,7 +167,7 @@ app.post("/upload", upload.any(), async (req, res) => {
     res.json({
       status: "success",
       downloadExcel: `https://mapstosheetsackend-1.onrender.com/download/${outputFilePath.split("/").pop()}`,
-      downloadTxt: `https://mapstosheetsackend-1.onrender.com/download/${txtFilePath.split("/").pop()}`,
+      downloadTxt: `http://localhost:5000/download/${txtFilePath.split("/").pop()}`,
     });
   } catch (error) {
     console.error("Error:", error);
