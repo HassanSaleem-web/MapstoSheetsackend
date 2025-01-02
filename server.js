@@ -21,24 +21,25 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 
 // --- Helper Functions ---
 
-// Parse DOCX for key-value pairs
-function parseDocx(docxPath) {
-    const doc = new Document(fs.readFileSync(docxPath));
-    let keyValuePairs = {};
+const mammoth = require("mammoth");
+
+async function parseDocx(docxPath) {
+    const result = await mammoth.extractRawText({ path: docxPath });
+    const text = result.value; // Extract text from the document
+
+    const keyValuePairs = {};
     let currentKey = "";
 
-    doc.paragraphs.forEach((para) => {
-        const text = para.text.trim();
-        const isBold = para.runs.some((run) => run.bold);
-
-        if (isBold) {
-            if (currentKey && !keyValuePairs[currentKey]) {
-                keyValuePairs[currentKey] = "No response"; // Mark as no response
+    const lines = text.split("\n");
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed) {
+            if (trimmed === trimmed.toUpperCase()) { // Heading (uppercase or bold-like behavior)
+                currentKey = trimmed;
+                keyValuePairs[currentKey] = "";
+            } else if (currentKey) {
+                keyValuePairs[currentKey] += " " + trimmed; // Append multi-line values
             }
-            currentKey = text; // Treat bold as heading
-        } else if (currentKey) {
-            keyValuePairs[currentKey] = text; // Treat non-bold as value
-            currentKey = ""; // Reset key
         }
     });
 
