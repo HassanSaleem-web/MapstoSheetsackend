@@ -19,34 +19,37 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 
 // ---- Helper Functions ----
 
-// Parse PDF (starting from page 2, ignoring headers)
+// Parse PDF and start recording from "AGE GROUP"
 async function parsePdf(filePath) {
   console.log(`Parsing PDF: ${filePath}`);
   const dataBuffer = fs.readFileSync(filePath);
   const data = await pdfParse(dataBuffer);
 
-  // Extract text from second page onward
-  const pages = data.text.split("\f"); // Page break indicator in PDF
-  if (pages.length < 2) throw new Error("PDF doesn't have a second page!");
-
-  // Get second page content
-  const content = pages[1];
-  const lines = content.split("\n").map((line) => line.trim());
+  // Split content into lines
+  const lines = data.text.split("\n").map((line) => line.trim());
+  let startRecording = false; // Flag to detect where to start recording
+  const results = {};
+  let pairs = [];
+  let key = null;
 
   console.log("Extracting key-value pairs...");
-  const results = {};
-  let key = null;
-  let pairs = [];
-
-  // Process each line
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    // Start recording when "AGE GROUP" is found
+    if (line.toUpperCase() === "AGE GROUP") {
+      startRecording = true;
+    }
+
+    if (!startRecording) continue; // Skip until "AGE GROUP" is found
+
+    // Skip empty lines or ignore headings
     if (line === "" || line.toUpperCase() === "QUESTIONNAIRE" || line.toUpperCase() === "QUESTIONS") {
-      continue; // Skip empty lines and headers
+      continue;
     }
 
     if (line === line.toUpperCase()) {
-      // Assume uppercase lines are headings (keys)
+      // Treat uppercase lines as headings (keys)
       key = line;
     } else if (key) {
       // Next line is the value
