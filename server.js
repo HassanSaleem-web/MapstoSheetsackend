@@ -4,13 +4,16 @@ const XLSX = require("xlsx-style");
 const fs = require("fs");
 const cors = require("cors");
 const path = require("path");
-const { Document } = require("docx");
+const mammoth = require("mammoth");
 const stringSimilarity = require("string-similarity");
 require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Serve static files for uploads
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Multer setup for file uploads
 const upload = multer({ dest: "uploads/" });
@@ -21,9 +24,9 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 
 // --- Helper Functions ---
 
-const mammoth = require("mammoth");
-
+// Parse DOCX and extract key-value pairs
 async function parseDocx(docxPath) {
+    console.log(`Parsing DOCX file: ${docxPath}`);
     const result = await mammoth.extractRawText({ path: docxPath });
     const text = result.value; // Extract text from the document
 
@@ -43,11 +46,13 @@ async function parseDocx(docxPath) {
         }
     });
 
+    console.log("Parsed Key-Value Pairs:", keyValuePairs); // Debug log
     return keyValuePairs;
 }
 
 // Save key-value pairs to CSV
 function saveToCsv(data, outputCsv) {
+    console.log(`Saving parsed data to CSV: ${outputCsv}`);
     const rows = [["Heading", "Value"]];
     for (const [key, value] of Object.entries(data)) {
         rows.push([key, value]);
@@ -62,9 +67,11 @@ function findMatchingCell(key) {
     const matches = stringSimilarity.findBestMatch(key, keys);
     const bestMatch = matches.bestMatch;
 
+    console.log(`Matching key: ${key}, Best Match: ${bestMatch.target}, Similarity: ${bestMatch.rating}`);
     if (bestMatch.rating >= 0.9) {
         return mappings[bestMatch.target];
     }
+    console.warn(`No mapping found for key: ${key}`);
     return null; // No match found
 }
 
@@ -112,7 +119,7 @@ app.post("/upload", upload.any(), async (req, res) => {
         }
 
         // Parse DOCX and extract key-value pairs
-        const keyValuePairs = parseDocx(docxFile.path);
+        const keyValuePairs = await parseDocx(docxFile.path);
         const csvPath = `uploads/results_${Date.now()}.csv`;
         saveToCsv(keyValuePairs, csvPath);
 
@@ -121,6 +128,7 @@ app.post("/upload", upload.any(), async (req, res) => {
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
         // Map values to Excel cells
+        console.log("Mapping values to Excel cells...");
         Object.keys(keyValuePairs).forEach((key) => {
             const value = keyValuePairs[key];
             const cell = findMatchingCell(key);
@@ -128,20 +136,23 @@ app.post("/upload", upload.any(), async (req, res) => {
             if (cell) {
                 worksheet[cell] = { v: value };
                 console.log(`Mapped: ${key} -> ${value} -> ${cell}`);
-            } else {
-                console.warn(`No mapping found for: ${key}`);
             }
         });
 
         // Apply formatting and save
+        console.log("Applying formatting...");
         applyFormatting(worksheet, formattingDetails);
+
         const outputFilePath = `uploads/updated_${Date.now()}.xlsx`;
         XLSX.writeFile(workbook, outputFilePath);
 
+        console.log(`Excel saved at: ${outputFilePath}`);
+        console.log(`CSV saved at: ${csvPath}`);
+
         res.json({
             status: "success",
-            downloadExcel: `https://mapstosheetsackend-1.onrender.com/download/${path.basename(outputFilePath)}`,
-            downloadCsv: `https://mapstosheetsackend-1.onrender.com/${path.basename(csvPath)}`,
+            downloadExcel: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(outputFilePath)}`,
+            downloadCsv: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(csvPath)}`,
         });
     } catch (error) {
         console.error("Error:", error);
@@ -152,7 +163,15 @@ app.post("/upload", upload.any(), async (req, res) => {
 // --- Download Route ---
 app.get("/download/:filename", (req, res) => {
     const filename = req.params.filename;
-    const filePath = `uploads/${filename}`;
+    const filePath = path.join(__dirname, "uploads", filename);
+
+    console.log(`Attempting to download: ${filePath}`); // Debug log
+
+    if (!fs.existsSync(filePath)) {
+        console.error("File not found:", filePath); // Debug log
+        return res.status(404).send("File not found.");
+    }
+
     res.download(filePath, (err) => {
         if (err) {
             console.error("Download error:", err);
