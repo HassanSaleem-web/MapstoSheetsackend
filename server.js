@@ -4,7 +4,7 @@ const XLSX = require("xlsx-style");
 const fs = require("fs");
 const cors = require("cors");
 const path = require("path");
-const { spawn } = require("child_process"); // For invoking Python script
+const mammoth = require("mammoth");
 const stringSimilarity = require("string-similarity");
 require("dotenv").config();
 
@@ -12,14 +12,68 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Serve static files for uploads
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 // Multer setup for file uploads
 const upload = multer({ dest: "uploads/" });
 
-// Load mappings and formatting details
+// Load mappings and formatting
 const mappings = JSON.parse(fs.readFileSync("mappings.json", "utf8"));
 const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", "utf8"));
 
 // --- Helper Functions ---
+
+// Parse DOCX and extract key-value pairs
+async function parseDocx(docxPath) {
+    console.log(`Parsing DOCX file: ${docxPath}`);
+    const result = await mammoth.extractRawText({ path: docxPath });
+    const text = result.value; // Extract text from the document
+
+    const keyValuePairs = {};
+    let currentKey = "";
+
+    const lines = text.split("\n");
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed) {
+            if (trimmed === trimmed.toUpperCase()) { // Heading (uppercase or bold-like behavior)
+                currentKey = trimmed;
+                keyValuePairs[currentKey] = "";
+            } else if (currentKey) {
+                keyValuePairs[currentKey] += " " + trimmed; // Append multi-line values
+            }
+        }
+    });
+
+    console.log("Parsed Key-Value Pairs:", keyValuePairs); // Debug log
+    return keyValuePairs;
+}
+
+// Save key-value pairs to CSV
+function saveToCsv(data, outputCsv) {
+    console.log(`Saving parsed data to CSV: ${outputCsv}`);
+    const rows = [["Heading", "Value"]];
+    for (const [key, value] of Object.entries(data)) {
+        rows.push([key, value]);
+    }
+    const csvContent = rows.map((row) => row.join(",")).join("\n");
+    fs.writeFileSync(outputCsv, csvContent);
+}
+
+// Match headings with 90% similarity
+function findMatchingCell(key) {
+    const keys = Object.keys(mappings);
+    const matches = stringSimilarity.findBestMatch(key, keys);
+    const bestMatch = matches.bestMatch;
+
+    console.log(`Matching key: ${key}, Best Match: ${bestMatch.target}, Similarity: ${bestMatch.rating}`);
+    if (bestMatch.rating >= 0.9) {
+        return mappings[bestMatch.target];
+    }
+    console.warn(`No mapping found for key: ${key}`);
+    return null; // No match found
+}
 
 // Apply formatting to Excel cells
 function applyFormatting(worksheet, formatting) {
@@ -44,7 +98,7 @@ function applyFormatting(worksheet, formatting) {
     });
 }
 
-// RGB to HEX conversion
+// RGB to HEX
 function rgbToHex(color) {
     const r = Math.round((color.red || 0) * 255).toString(16).padStart(2, "0");
     const g = Math.round((color.green || 0) * 255).toString(16).padStart(2, "0");
@@ -52,107 +106,53 @@ function rgbToHex(color) {
     return r + g + b;
 }
 
-// Match headings with 90% similarity
-function findMatchingCell(key) {
-    const keys = Object.keys(mappings);
-    const matches = stringSimilarity.findBestMatch(key, keys);
-    const bestMatch = matches.bestMatch;
-
-    if (bestMatch.rating >= 0.9) {
-        return mappings[bestMatch.target];
-    }
-    return null; // No match found
-}
-
 // --- Upload Endpoint ---
 app.post("/upload", upload.any(), async (req, res) => {
     try {
         console.log("Files uploaded successfully.");
 
-        // Get uploaded files
         const docxFile = req.files.find((file) => file.fieldname === "docxFile");
         const excelFile = req.files.find((file) => file.fieldname === "excelFile");
 
         if (!docxFile || !excelFile) {
-            console.error("Missing required files!");
             return res.status(400).json({ status: "error", message: "Missing required files!" });
         }
 
-        // --- Invoke Python script ---
-        console.log("Invoking Python script to parse DOCX...");
-        const pythonProcess = spawn("python", ["parse_docx.py", docxFile.path]);
+        // Parse DOCX and extract key-value pairs
+        const keyValuePairs = await parseDocx(docxFile.path);
+        const csvPath = `uploads/results_${Date.now()}.csv`;
+        saveToCsv(keyValuePairs, csvPath);
 
-        let output = "";
-        let error = "";
+        // Load Excel template
+        const workbook = XLSX.readFile(excelFile.path);
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-        pythonProcess.stdout.on("data", (data) => {
-            output += data.toString();
-        });
+        // Map values to Excel cells
+        console.log("Mapping values to Excel cells...");
+        Object.keys(keyValuePairs).forEach((key) => {
+            const value = keyValuePairs[key];
+            const cell = findMatchingCell(key);
 
-        pythonProcess.stderr.on("data", (data) => {
-            error += data.toString();
-        });
-
-        pythonProcess.on("close", (code) => {
-            if (code !== 0 || error) {
-                console.error("Python script execution failed:", error);
-                return res.status(500).json({ status: "error", message: "Failed to process DOCX file!" });
+            if (cell) {
+                worksheet[cell] = { v: value };
+                console.log(`Mapped: ${key} -> ${value} -> ${cell}`);
             }
+        });
 
-            console.log("Python script executed successfully.");
+        // Apply formatting and save
+        console.log("Applying formatting...");
+        applyFormatting(worksheet, formattingDetails);
 
-            // Read the generated CSV file
-            const csvPath = "parsed_data.csv";
-            console.log(`Reading generated CSV file: ${csvPath}`);
-            const csvData = fs.readFileSync(csvPath, "utf8");
+        const outputFilePath = `uploads/updated_${Date.now()}.xlsx`;
+        XLSX.writeFile(workbook, outputFilePath);
 
-            const rows = csvData.split("\n").slice(1); // Skip header row
-            const keyValuePairs = {};
-            rows.forEach((row) => {
-                const [key, value] = row.split(",");
-                if (key && value) {
-                    keyValuePairs[key.trim()] = value.trim();
-                }
-            });
+        console.log(`Excel saved at: ${outputFilePath}`);
+        console.log(`CSV saved at: ${csvPath}`);
 
-            // Debug: Show extracted key-value pairs
-            console.log("Extracted Data from DOCX (Key-Value Pairs):");
-            console.table(keyValuePairs); // Tabular debug output for clarity
-
-            // --- Process Excel ---
-            console.log("Processing Excel file...");
-            const workbook = XLSX.readFile(excelFile.path);
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-
-            // Debug: Data mapping process
-            console.log("Starting data mapping to Excel cells...");
-            Object.keys(keyValuePairs).forEach((key) => {
-                const value = keyValuePairs[key];
-                const cell = findMatchingCell(key);
-
-                if (cell) {
-                    worksheet[cell] = { v: value };
-                    console.log(`Mapped -> Key: "${key}" | Value: "${value}" | Cell: "${cell}"`);
-                } else {
-                    console.warn(`Skipped -> Key: "${key}" (No mapping found)`);
-                }
-            });
-
-            // Apply formatting
-            console.log("Applying formatting to Excel...");
-            applyFormatting(worksheet, formattingDetails);
-
-            // Save updated Excel file
-            const outputFilePath = `uploads/updated_${Date.now()}.xlsx`;
-            XLSX.writeFile(workbook, outputFilePath);
-            console.log(`Updated Excel saved at: ${outputFilePath}`);
-
-            // Response
-            res.json({
-                status: "success",
-                downloadExcel: `https://mapstosheetsackend-1.onrender.com/download/${path.basename(outputFilePath)}`,
-                downloadCsv: `https://mapstosheetsackend-1.onrender.com/download/${csvPath}`,
-            });
+        res.json({
+            status: "success",
+            downloadExcel: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(outputFilePath)}`,
+            downloadCsv: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(csvPath)}`,
         });
     } catch (error) {
         console.error("Error:", error);
@@ -164,7 +164,14 @@ app.post("/upload", upload.any(), async (req, res) => {
 app.get("/download/:filename", (req, res) => {
     const filename = req.params.filename;
     const filePath = path.join(__dirname, "uploads", filename);
-    console.log(`Download requested for file: ${filename}`);
+
+    console.log(`Attempting to download: ${filePath}`); // Debug log
+
+    if (!fs.existsSync(filePath)) {
+        console.error("File not found:", filePath); // Debug log
+        return res.status(404).send("File not found.");
+    }
+
     res.download(filePath, (err) => {
         if (err) {
             console.error("Download error:", err);
@@ -173,7 +180,7 @@ app.get("/download/:filename", (req, res) => {
     });
 });
 
-// --- Start Server ---
+// Start Server
 app.listen(5000, () => {
     console.log("Server running on http://localhost:5000");
 });
