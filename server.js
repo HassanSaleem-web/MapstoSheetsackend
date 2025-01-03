@@ -25,41 +25,48 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 // --- Helper Functions ---
 
 // Parse DOCX and extract key-value pairs
-async function parseDocx(docxPath) {
+function parseDocx(docxPath) {
     console.log(`Parsing DOCX file: ${docxPath}`);
 
-    // Parse DOCX file using docx-parser
-    const data = await docxParser.parseDocx(docxPath);
+    return new Promise((resolve, reject) => {
+        docxParser.parseDocx(docxPath, (err, data) => {
+            if (err) {
+                reject(err); // Handle errors
+            } else {
+                const keyValuePairs = {};
+                let currentKey = "";
 
-    const keyValuePairs = {};
-    let currentKey = "";
+                // Split text into lines and analyze each line
+                const lines = data.split("\n");
+                lines.forEach((line) => {
+                    const trimmed = line.trim();
+                    if (trimmed) {
+                        // Treat uppercase text as headings
+                        if (trimmed === trimmed.toUpperCase()) {
+                            if (currentKey) {
+                                keyValuePairs[currentKey] =
+                                    keyValuePairs[currentKey].trim() || "No response";
+                            }
+                            currentKey = trimmed; // Set new heading
+                            keyValuePairs[currentKey] = ""; // Initialize value
+                        } else if (currentKey) {
+                            // Append non-uppercase text as values
+                            keyValuePairs[currentKey] += " " + trimmed;
+                        }
+                    }
+                });
 
-    // Split text into lines and analyze each line
-    const lines = data.split("\n");
-    lines.forEach((line) => {
-        const trimmed = line.trim();
-        if (trimmed) {
-            // Treat uppercase text as headings
-            if (trimmed === trimmed.toUpperCase()) {
+                // Save the last key-value pair
                 if (currentKey) {
-                    keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
+                    keyValuePairs[currentKey] =
+                        keyValuePairs[currentKey].trim() || "No response";
                 }
-                currentKey = trimmed; // Set new heading
-                keyValuePairs[currentKey] = ""; // Initialize value
-            } else if (currentKey) {
-                // Append non-uppercase text as values
-                keyValuePairs[currentKey] += " " + trimmed;
+
+                console.log("Extracted Key-Value Pairs:", keyValuePairs); // Debug log
+                resolve(keyValuePairs); // Return parsed data
             }
-        }
+        });
     });
-
-    // Save the last key-value pair
-    if (currentKey) {
-        keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
-    }
-
-    console.log("Extracted Key-Value Pairs:", keyValuePairs); // Debug log
-    return keyValuePairs;
 }
 
 // Save key-value pairs to CSV
