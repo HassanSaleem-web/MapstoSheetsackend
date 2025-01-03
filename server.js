@@ -4,7 +4,7 @@ const XLSX = require("xlsx-style");
 const fs = require("fs");
 const cors = require("cors");
 const path = require("path");
-const mammoth = require("mammoth");
+const docx4js = require("docx4js"); // New package for DOCX parsing
 const stringSimilarity = require("string-similarity");
 require("dotenv").config();
 
@@ -27,26 +27,50 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 // Parse DOCX and extract key-value pairs
 async function parseDocx(docxPath) {
     console.log(`Parsing DOCX file: ${docxPath}`);
-    const result = await mammoth.extractRawText({ path: docxPath });
-    const text = result.value; // Extract text from the document
+    const doc = await docx4js.load(fs.readFileSync(docxPath)); // Load DOCX file
 
     const keyValuePairs = {};
     let currentKey = "";
 
-    const lines = text.split("\n");
-    lines.forEach((line) => {
-        const trimmed = line.trim();
-        if (trimmed) {
-            if (trimmed === trimmed.toUpperCase()) { // Heading (uppercase or bold-like behavior)
-                currentKey = trimmed;
-                keyValuePairs[currentKey] = "";
-            } else if (currentKey) {
-                keyValuePairs[currentKey] += " " + trimmed; // Append multi-line values
+    // Traverse through document content
+    doc.officeDocument.content.forEach((element) => {
+        element.children.forEach((child) => {
+            if (child.name === "w:p") { // Check for paragraphs
+                // Detect if text is bold
+                const isBold = child.children.some((run) =>
+                    run.children.some((text) => text.name === "w:b")
+                );
+
+                // Extract text content
+                const text = child.children
+                    .flatMap((run) =>
+                        run.children.filter((t) => t.name === "w:t").map((t) => t.text)
+                    )
+                    .join(" ");
+
+                if (text.trim()) {
+                    if (isBold) {
+                        // Bold text -> Heading
+                        if (currentKey) {
+                            keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
+                        }
+                        currentKey = text.trim(); // Set new heading
+                        keyValuePairs[currentKey] = ""; // Initialize value
+                    } else if (currentKey) {
+                        // Non-bold text -> Append value
+                        keyValuePairs[currentKey] += " " + text.trim();
+                    }
+                }
             }
-        }
+        });
     });
 
-    console.log("Parsed Key-Value Pairs:", keyValuePairs); // Debug log
+    // Save last key-value pair
+    if (currentKey) {
+        keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
+    }
+
+    console.log("Extracted Key-Value Pairs:", keyValuePairs); // Debug output
     return keyValuePairs;
 }
 
@@ -151,33 +175,13 @@ app.post("/upload", upload.any(), async (req, res) => {
 
         res.json({
             status: "success",
-            downloadExcel: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(outputFilePath)}`,
-            downloadCsv: `https://mapstosheetsackend-1.onrender.com/uploads/${path.basename(csvPath)}`,
+            downloadExcel: `/uploads/${path.basename(outputFilePath)}`,
+            downloadCsv: `/uploads/${path.basename(csvPath)}`,
         });
     } catch (error) {
         console.error("Error:", error);
         res.json({ status: "error", message: error.toString() });
     }
-});
-
-// --- Download Route ---
-app.get("/download/:filename", (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(__dirname, "uploads", filename);
-
-    console.log(`Attempting to download: ${filePath}`); // Debug log
-
-    if (!fs.existsSync(filePath)) {
-        console.error("File not found:", filePath); // Debug log
-        return res.status(404).send("File not found.");
-    }
-
-    res.download(filePath, (err) => {
-        if (err) {
-            console.error("Download error:", err);
-            res.status(500).send("Error downloading the file.");
-        }
-    });
 });
 
 // Start Server
