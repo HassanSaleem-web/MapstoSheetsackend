@@ -4,7 +4,7 @@ const XLSX = require("xlsx-style");
 const fs = require("fs");
 const cors = require("cors");
 const path = require("path");
-const docx4js = require("docx4js"); // New package for DOCX parsing
+const docxParser = require("docx-parser"); // New package for DOCX parsing
 const stringSimilarity = require("string-similarity");
 require("dotenv").config();
 
@@ -18,7 +18,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Multer setup for file uploads
 const upload = multer({ dest: "uploads/" });
 
-// Load mappings and formatting
+// Load mappings and formatting details
 const mappings = JSON.parse(fs.readFileSync("mappings.json", "utf8"));
 const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", "utf8"));
 
@@ -27,50 +27,38 @@ const formattingDetails = JSON.parse(fs.readFileSync("formatting_details.json", 
 // Parse DOCX and extract key-value pairs
 async function parseDocx(docxPath) {
     console.log(`Parsing DOCX file: ${docxPath}`);
-    const doc = await docx4js.load(fs.readFileSync(docxPath)); // Load DOCX file
+
+    // Parse DOCX file using docx-parser
+    const data = await docxParser.parseDocx(docxPath);
 
     const keyValuePairs = {};
     let currentKey = "";
 
-    // Traverse through document content
-    doc.officeDocument.content.forEach((element) => {
-        element.children.forEach((child) => {
-            if (child.name === "w:p") { // Check for paragraphs
-                // Detect if text is bold
-                const isBold = child.children.some((run) =>
-                    run.children.some((text) => text.name === "w:b")
-                );
-
-                // Extract text content
-                const text = child.children
-                    .flatMap((run) =>
-                        run.children.filter((t) => t.name === "w:t").map((t) => t.text)
-                    )
-                    .join(" ");
-
-                if (text.trim()) {
-                    if (isBold) {
-                        // Bold text -> Heading
-                        if (currentKey) {
-                            keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
-                        }
-                        currentKey = text.trim(); // Set new heading
-                        keyValuePairs[currentKey] = ""; // Initialize value
-                    } else if (currentKey) {
-                        // Non-bold text -> Append value
-                        keyValuePairs[currentKey] += " " + text.trim();
-                    }
+    // Split text into lines and analyze each line
+    const lines = data.split("\n");
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed) {
+            // Treat uppercase text as headings
+            if (trimmed === trimmed.toUpperCase()) {
+                if (currentKey) {
+                    keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
                 }
+                currentKey = trimmed; // Set new heading
+                keyValuePairs[currentKey] = ""; // Initialize value
+            } else if (currentKey) {
+                // Append non-uppercase text as values
+                keyValuePairs[currentKey] += " " + trimmed;
             }
-        });
+        }
     });
 
-    // Save last key-value pair
+    // Save the last key-value pair
     if (currentKey) {
         keyValuePairs[currentKey] = keyValuePairs[currentKey].trim() || "No response";
     }
 
-    console.log("Extracted Key-Value Pairs:", keyValuePairs); // Debug output
+    console.log("Extracted Key-Value Pairs:", keyValuePairs); // Debug log
     return keyValuePairs;
 }
 
@@ -135,6 +123,7 @@ app.post("/upload", upload.any(), async (req, res) => {
     try {
         console.log("Files uploaded successfully.");
 
+        // Extract uploaded files
         const docxFile = req.files.find((file) => file.fieldname === "docxFile");
         const excelFile = req.files.find((file) => file.fieldname === "excelFile");
 
@@ -184,7 +173,7 @@ app.post("/upload", upload.any(), async (req, res) => {
     }
 });
 
-// Start Server
+// --- Start Server ---
 app.listen(5000, () => {
     console.log("Server running on http://localhost:5000");
 });
